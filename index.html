@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>アップ君のスクワットチャレンジ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;user-select:none;-webkit-user-select:none}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#e5e7eb;font-family:"DotGothic16",system-ui,sans-serif;touch-action:manipulation}
+#wrap{width:900px;height:520px;position:absolute;left:50%;top:50%;transform-origin:center center;transform:translate(-50%,-50%)}
+#game{width:900px;height:520px;position:relative;overflow:hidden;border:6px solid #2f3542;box-shadow:0 12px 28px rgba(0,0,0,.25);background:#111827}
+.bg-layer{position:absolute;inset:0;background-size:cover;background-position:center center;image-rendering:pixelated;transition:opacity 1s linear;z-index:0}
+#bgCurrent{opacity:1}#bgNext{opacity:0}
+#hud{position:absolute;top:18px;left:22px;color:#f8fafc;text-shadow:2px 2px #000;font-size:22px;line-height:1.55;z-index:5}
+#judge{position:absolute;top:82px;left:50%;transform:translateX(-50%);font-size:44px;text-shadow:3px 3px #000;height:60px;z-index:8;opacity:0}
+#judge.show{animation:judgePop .36s ease-out}
+@keyframes judgePop{0%{opacity:0;transform:translateX(-50%) scale(.8)}25%{opacity:1;transform:translateX(-50%) scale(1.15)}100%{opacity:0;transform:translateX(-50%) scale(1)}}
+#ringArea{position:absolute;left:50%;top:-8px;width:220px;height:220px;transform:translateX(-50%);z-index:4;pointer-events:none}
+#ringCanvas{width:220px;height:220px;image-rendering:pixelated}
+#stage{position:absolute;left:50%;bottom:24px;width:420px;height:360px;transform:translateX(-50%);z-index:3;display:flex;justify-content:center;align-items:flex-end;pointer-events:none}
+#appkun{position:absolute;bottom:0;width:330px;height:330px;object-fit:contain;image-rendering:pixelated;z-index:7;transition:transform .09s ease-out,filter .09s ease-out}
+#stage.squat #appkun{transform:translateY(18px) scale(1.02)}
+#stage.miss #appkun{transform:translateY(22px) rotate(-2deg) scale(.98);filter:brightness(.75)}
+#start,#gameover{position:absolute;inset:0;background:rgba(13,18,27,.88);color:#f8fafc;z-index:20;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center}
+#gameover{display:none}
+h1{margin:0 0 8px;font-size:46px;text-shadow:3px 3px #000}
+.sub{color:#cbd5e1;font-size:20px;margin-bottom:26px}
+button{font-family:"DotGothic16",system-ui,sans-serif;font-size:26px;color:white;background:#2563eb;border:4px solid #111827;border-radius:8px;padding:14px 42px;box-shadow:0 6px 0 #111827;cursor:pointer}
+button:active{transform:translateY(6px);box-shadow:none}
+.help{position:absolute;bottom:14px;width:100%;text-align:center;color:white;font-size:18px;text-shadow:2px 2px #000;z-index:10}
+.small{margin-top:18px;color:#e5e7eb;font-size:18px}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="game">
+    <div id="bgCurrent" class="bg-layer"></div>
+    <div id="bgNext" class="bg-layer"></div>
+    <div id="hud">回数：<span id="rep">0</span><br>最高：<span id="best">0</span><br>重量：<span id="weight">20</span>kg</div>
+    <div id="ringArea"><canvas id="ringCanvas" width="220" height="220"></canvas></div>
+    <div id="judge"></div>
+    <div id="stage"><img id="appkun" alt="アップ君" src="./images/apkun_squat_stand.png"></div>
+    <div class="help">SPACE / タップ：タイミングよくスクワット</div>
+    <div id="start">
+      <h1>アップ君のスクワット</h1>
+      <div class="sub">丸が枠に重なった瞬間に押せ！</div>
+      <button id="startBtn">GAME START</button>
+      <div class="small">100回まではゆるやかに難化。101回目から少しずつフェイント増加</div>
+    </div>
+    <div id="gameover">
+      <h1>GAME OVER</h1>
+      <div class="sub" id="resultText"></div>
+      <button id="retryBtn">RETRY</button>
+      <div class="small">SPACE / タップでも再挑戦</div>
+    </div>
+  </div>
+</div>
+<audio id="bgm" src="./bgm/Pocket_Gym.mp3" loop preload="auto"></audio>
+<script>
+const wrap=document.getElementById("wrap");
+const ringCanvas=document.getElementById("ringCanvas");
+const ctx=ringCanvas.getContext("2d");
+const stage=document.getElementById("stage");
+const appkunImg=document.getElementById("appkun");
+const judgeEl=document.getElementById("judge");
+const repEl=document.getElementById("rep");
+const bestEl=document.getElementById("best");
+const weightEl=document.getElementById("weight");
+const start=document.getElementById("start");
+const gameover=document.getElementById("gameover");
+const resultText=document.getElementById("resultText");
+const bgCurrent=document.getElementById("bgCurrent");
+const bgNext=document.getElementById("bgNext");
+const bgm=document.getElementById("bgm");
+
+const STAND_IMG="./images/apkun_squat_stand.png";
+const SQUAT_IMG="./images/apkun_squat.png";
+const BACKGROUNDS=["./images/mornig.jpg","./images/evening.jpg","./images/nigth.jpg"];
+
+let state="START";
+let reps=0,perfectCount=0,goodCount=0,badCount=0,perfectCombo=0,maxPerfectCombo=0;
+let best=Number(localStorage.getItem("appkunSquatBest")||0);
+let targetRadius=44,currentRadius=86,shrinkSpeed=.85,randomMode=false,randomSpeed=shrinkSpeed,lastTime=0;
+let currentBgIndex=0,isTransitioningBg=false,squatTimer=null;
+let gameOverAt=0;
+let gameOverLocked=false;
+
+bestEl.textContent=best;
+bgCurrent.style.backgroundImage=`url("${BACKGROUNDS[0]}")`;
+
+function resize(){const scale=Math.min(window.innerWidth/900,window.innerHeight/520,1.4);wrap.style.transform=`translate(-50%,-50%) scale(${scale})`}
+window.addEventListener("resize",resize);resize();
+let audioCtx=null;
+
+function getAudioCtx(){
+  if(!audioCtx){
+    audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  }
+  if(audioCtx.state==="suspended"){
+    audioCtx.resume();
+  }
+  return audioCtx;
+}
+
+function playTone(freq,start,duration,type="square",volume=.18){
+  const ctx=getAudioCtx();
+  const osc=ctx.createOscillator();
+  const gain=ctx.createGain();
+
+  osc.type=type;
+  osc.frequency.setValueAtTime(freq,ctx.currentTime+start);
+
+  gain.gain.setValueAtTime(volume,ctx.currentTime+start);
+  gain.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+start+duration);
+
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  osc.start(ctx.currentTime+start);
+  osc.stop(ctx.currentTime+start+duration);
+}
+
+function playPerfectSound(){
+  playTone(880,0,.08,"square",.16);
+  playTone(1320,.08,.10,"square",.14);
+  playTone(1760,.18,.12,"triangle",.12);
+}
+
+function playGoodSound(){
+  playTone(660,0,.08,"square",.14);
+  playTone(990,.08,.10,"triangle",.12);
+}
+
+function playBadSound(){
+  playTone(220,0,.10,"sawtooth",.14);
+  playTone(180,.08,.12,"sawtooth",.12);
+}
+
+function playMissSound(){
+  playTone(180,0,.12,"sawtooth",.18);
+  playTone(120,.10,.18,"sawtooth",.16);
+  playTone(80,.24,.22,"square",.13);
+}
+
+function startBgm(){
+  if(!bgm)return;
+  bgm.volume=.35;
+  bgm.play().catch(()=>{});
+}
+
+function stopBgm(){
+  if(!bgm)return;
+  bgm.pause();
+  bgm.currentTime=0;
+}
+
+
+function setAppKunStanding(){appkunImg.src=STAND_IMG;stage.classList.remove("squat","miss")}
+function showSquatPose(kind){
+  clearTimeout(squatTimer);
+  appkunImg.src=SQUAT_IMG;
+  if(kind==="MISS"){
+    stage.classList.remove("squat");stage.classList.add("miss");
+    squatTimer=setTimeout(setAppKunStanding,220);
+  }else{
+    stage.classList.remove("miss");stage.classList.add("squat");
+    squatTimer=setTimeout(setAppKunStanding,140);
+  }
+}
+
+function updateBackgroundByReps(){
+  const nextIndex=Math.floor(reps/50)%BACKGROUNDS.length;
+  if(nextIndex===currentBgIndex||isTransitioningBg)return;
+  isTransitioningBg=true;
+  bgNext.style.transition="none";
+  bgNext.style.opacity="0";
+  bgNext.style.backgroundImage=`url("${BACKGROUNDS[nextIndex]}")`;
+  requestAnimationFrame(()=>{
+    bgNext.style.transition="opacity 1s linear";
+    bgCurrent.style.transition="opacity 1s linear";
+    bgNext.style.opacity="1";
+    bgCurrent.style.opacity="0";
+  });
+  setTimeout(()=>{
+    bgCurrent.style.transition="none";
+    bgCurrent.style.backgroundImage=`url("${BACKGROUNDS[nextIndex]}")`;
+    bgCurrent.style.opacity="1";
+    bgNext.style.transition="none";
+    bgNext.style.opacity="0";
+    currentBgIndex=nextIndex;
+    isTransitioningBg=false;
+  },1000);
+}
+
+function resetGame(){
+  reps=0;perfectCount=0;goodCount=0;badCount=0;perfectCombo=0;maxPerfectCombo=0;
+  targetRadius=44;currentRadius=86;shrinkSpeed=.85;randomMode=false;randomSpeed=shrinkSpeed;lastTime=0;
+  currentBgIndex=0;bgCurrent.style.backgroundImage=`url("${BACKGROUNDS[0]}")`;bgCurrent.style.opacity="1";bgNext.style.opacity="0";
+  setAppKunStanding();updateHud();weightEl.textContent=20;
+  gameOverLocked=false;startBgm();state="PLAYING";start.style.display="none";gameover.style.display="none";
+}
+
+function updateDifficulty(){
+  const preLevel=Math.min(Math.floor(reps/10),10);
+  targetRadius=44-preLevel*1.0;
+  shrinkSpeed=.85+preLevel*.125;
+  randomMode=reps>=100;
+  weightEl.textContent=20+Math.floor(reps/10)*10;
+}
+function nextCircle(){
+  currentRadius=86;updateDifficulty();
+  if(randomMode){
+    const postLevel=Math.min(Math.floor((reps-100)/10),20);
+    const variance=.15+postLevel*.08;
+    const minSpeed=Math.max(1.15,shrinkSpeed-variance);
+    const maxSpeed=shrinkSpeed+variance;
+    randomSpeed=minSpeed+Math.random()*(maxSpeed-minSpeed);
+  }else{randomSpeed=shrinkSpeed}
+  updateBackgroundByReps();
+}
+function getAccuracy(){if(reps===0)return 100;const score=perfectCount*100+goodCount*70+badCount*40;return Math.round(score/(reps*100)*100)}
+function getTitle(accuracy,reps){if(reps>=100&&accuracy>=95)return"フォーム職人";if(accuracy>=95)return"スクワットマスター";if(accuracy>=90)return"ナイスバルク";if(accuracy>=80)return"筋トレ中級者";if(accuracy>=70)return"筋トレ初心者";return"フォーム見直そう！"}
+function updateHud(){repEl.textContent=reps}
+function showJudge(text,color){judgeEl.textContent=text;judgeEl.style.color=color;judgeEl.classList.remove("show");void judgeEl.offsetWidth;judgeEl.classList.add("show")}
+
+function input(){
+  if(state==="GAMEOVER"&&Date.now()-gameOverAt<1200){return}
+  if(gameOverLocked){return}
+  if(state==="START"){resetGame();return}
+  if(state==="GAMEOVER"){resetGame();return}
+  if(state!=="PLAYING")return;
+
+  const diff=Math.abs(currentRadius-targetRadius);
+
+  if(diff<=3){
+    playPerfectSound();
+    reps++;
+    perfectCount++;
+    perfectCombo++;
+    maxPerfectCombo=Math.max(maxPerfectCombo,perfectCombo);
+    showJudge(perfectCombo>0&&perfectCombo%10===0?`PERFECT×${perfectCombo}`:"PERFECT","#facc15");
+    showSquatPose("PERFECT");
+    nextCircle();
+
+  }else if(diff<=9){
+    playGoodSound();
+    reps++;
+    goodCount++;
+    perfectCombo=0;
+    showJudge("GOOD","#22c55e");
+    showSquatPose("GOOD");
+    nextCircle();
+
+  }else if(diff<=17){
+    playBadSound();
+    reps++;
+    badCount++;
+    perfectCombo=0;
+    showJudge("BAD","#fb923c");
+    showSquatPose("BAD");
+    nextCircle();
+
+  }else{
+    playMissSound();
+    perfectCombo=0;
+    showJudge("MISS","#ef4444");
+    showSquatPose("MISS");
+
+    // MISS演出を見せるため、0.6秒後にリザルト表示。
+    // MISSから1.2秒経過するまで再スタート操作は受け付けない。
+    state="GAMEOVER";
+    gameOverLocked=true;
+    gameOverAt=Date.now();
+
+    setTimeout(()=>{
+      endGame();
+    },600);
+
+    setTimeout(()=>{
+      gameOverLocked=false;
+    },1200);
+
+    return;
+  }
+
+  updateHud();
+}
+
+function endGame(){
+  state="GAMEOVER";
+  stopBgm();
+  const accuracy=getAccuracy();
+  const title=getTitle(accuracy,reps);
+  const recordLine=reps>best?"新記録！ナイスバルク！":`最高記録：${best}回`;
+  if(reps>best){best=reps;localStorage.setItem("appkunSquatBest",String(best));bestEl.textContent=best}
+  resultText.innerHTML=`
+    <div style="font-size:24px;color:#facc15;margin-bottom:8px;">${recordLine}</div>
+    <div>記録：${reps}回</div>
+    <div>PERFECT：${perfectCount} / GOOD：${goodCount} / BAD：${badCount}</div>
+    <div>精度：${accuracy}%</div>
+    <div>最大PERFECTコンボ：${maxPerfectCombo}</div>
+    <div style="margin-top:8px;color:#93c5fd;">称号：${title}</div>
+  `;
+  gameover.style.display="flex";
+}
+
+function drawRing(){
+  ctx.clearRect(0,0,220,220);
+  const cx=110,cy=110;
+  ctx.beginPath();ctx.arc(cx,cy,targetRadius,0,Math.PI*2);ctx.strokeStyle="#fff";ctx.lineWidth=6;ctx.stroke();
+  ctx.beginPath();ctx.arc(cx,cy,currentRadius,0,Math.PI*2);ctx.strokeStyle="#60a5fa";ctx.lineWidth=8;ctx.stroke();
+}
+function loop(timestamp){
+  if(!lastTime)lastTime=timestamp;
+  const delta=Math.min((timestamp-lastTime)/16.67,2);
+  lastTime=timestamp;
+  if(state==="PLAYING"){currentRadius-=randomSpeed*delta;if(currentRadius<=0)nextCircle()}
+  drawRing();requestAnimationFrame(loop);
+}
+document.getElementById("startBtn").addEventListener("click",input);
+document.getElementById("retryBtn").addEventListener("click",input);
+window.addEventListener("keydown",(e)=>{if(e.code==="Space"||e.code==="ArrowUp"||e.code==="Enter"){e.preventDefault();input()}});
+window.addEventListener("pointerdown",(e)=>{if(e.target.tagName==="BUTTON")return;input()});
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
