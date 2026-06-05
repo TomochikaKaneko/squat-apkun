@@ -79,48 +79,68 @@ const bgm=document.getElementById("bgm");
 const STAND_IMG="./images/apkun_squat_stand.png";
 const SQUAT_IMG="./images/apkun_squat.png";
 const BACKGROUNDS=["./images/mornig.jpg","./images/evening.jpg","./images/nigth.jpg"];
+const STORAGE_KEY="appkunSquatBest";
+const INPUT_DEBOUNCE_MS=70;
 
 let state="START";
 let reps=0,perfectCount=0,goodCount=0,badCount=0,perfectCombo=0,maxPerfectCombo=0;
-let best=Number(localStorage.getItem("appkunSquatBest")||0);
+let best=loadBest();
 let targetRadius=44,currentRadius=86,shrinkSpeed=.85,randomMode=false,randomSpeed=shrinkSpeed,lastTime=0;
-let currentBgIndex=0,isTransitioningBg=false,squatTimer=null;
+let currentBgIndex=0,isTransitioningBg=false,squatTimer=null,bgTransitionTimer=null,bgTransitionFrame=0;
 let gameOverAt=0;
 let gameOverLocked=false;
+let endGameTimer=null,unlockTimer=null,rafId=0,lastInputAt=0;
 
 bestEl.textContent=best;
 bgCurrent.style.backgroundImage=`url("${BACKGROUNDS[0]}")`;
+
+function loadBest(){
+  try{
+    const value=Number(localStorage.getItem(STORAGE_KEY)||0);
+    return Number.isFinite(value)&&value>0?value:0;
+  }catch(e){return 0}
+}
+
+function saveBest(value){
+  try{localStorage.setItem(STORAGE_KEY,String(value))}catch(e){}
+}
 
 function resize(){const scale=Math.min(window.innerWidth/900,window.innerHeight/520,1.4);wrap.style.transform=`translate(-50%,-50%) scale(${scale})`}
 window.addEventListener("resize",resize);resize();
 let audioCtx=null;
 
 function getAudioCtx(){
-  if(!audioCtx){
-    audioCtx=new (window.AudioContext||window.webkitAudioContext)();
-  }
-  if(audioCtx.state==="suspended"){
-    audioCtx.resume();
-  }
-  return audioCtx;
+  try{
+    const AudioCtor=window.AudioContext||window.webkitAudioContext;
+    if(!AudioCtor)return null;
+    if(!audioCtx){audioCtx=new AudioCtor()}
+    if(audioCtx.state==="suspended"){
+      const resumeResult=audioCtx.resume();
+      if(resumeResult&&resumeResult.catch)resumeResult.catch(()=>{});
+    }
+    return audioCtx;
+  }catch(e){return null}
 }
 
 function playTone(freq,start,duration,type="square",volume=.18){
-  const ctx=getAudioCtx();
-  const osc=ctx.createOscillator();
-  const gain=ctx.createGain();
+  try{
+    const soundCtx=getAudioCtx();
+    if(!soundCtx)return;
+    const osc=soundCtx.createOscillator();
+    const gain=soundCtx.createGain();
 
-  osc.type=type;
-  osc.frequency.setValueAtTime(freq,ctx.currentTime+start);
+    osc.type=type;
+    osc.frequency.setValueAtTime(freq,soundCtx.currentTime+start);
 
-  gain.gain.setValueAtTime(volume,ctx.currentTime+start);
-  gain.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+start+duration);
+    gain.gain.setValueAtTime(volume,soundCtx.currentTime+start);
+    gain.gain.exponentialRampToValueAtTime(.001,soundCtx.currentTime+start+duration);
 
-  osc.connect(gain);
-  gain.connect(ctx.destination);
+    osc.connect(gain);
+    gain.connect(soundCtx.destination);
 
-  osc.start(ctx.currentTime+start);
-  osc.stop(ctx.currentTime+start+duration);
+    osc.start(soundCtx.currentTime+start);
+    osc.stop(soundCtx.currentTime+start+duration);
+  }catch(e){}
 }
 
 function playPerfectSound(){
@@ -146,17 +166,31 @@ function playMissSound(){
 }
 
 function startBgm(){
-  if(!bgm)return;
+  if(!bgm||!bgm.paused)return;
   bgm.volume=.35;
-  bgm.play().catch(()=>{});
+  const playResult=bgm.play();
+  if(playResult&&playResult.catch)playResult.catch(()=>{});
 }
 
 function stopBgm(){
   if(!bgm)return;
-  bgm.pause();
-  bgm.currentTime=0;
+  try{
+    bgm.pause();
+    bgm.currentTime=0;
+  }catch(e){}
 }
 
+function clearGameTimers(){
+  clearTimeout(squatTimer);
+  clearTimeout(bgTransitionTimer);
+  clearTimeout(endGameTimer);
+  clearTimeout(unlockTimer);
+  if(bgTransitionFrame)cancelAnimationFrame(bgTransitionFrame);
+  bgTransitionFrame=0;
+  bgTransitionTimer=null;
+  endGameTimer=null;
+  unlockTimer=null;
+}
 
 function setAppKunStanding(){appkunImg.src=STAND_IMG;stage.classList.remove("squat","miss")}
 function showSquatPose(kind){
@@ -178,13 +212,16 @@ function updateBackgroundByReps(){
   bgNext.style.transition="none";
   bgNext.style.opacity="0";
   bgNext.style.backgroundImage=`url("${BACKGROUNDS[nextIndex]}")`;
-  requestAnimationFrame(()=>{
+  bgTransitionFrame=requestAnimationFrame(()=>{
+    bgTransitionFrame=0;
+    if(!isTransitioningBg)return;
     bgNext.style.transition="opacity 1s linear";
     bgCurrent.style.transition="opacity 1s linear";
     bgNext.style.opacity="1";
     bgCurrent.style.opacity="0";
   });
-  setTimeout(()=>{
+  bgTransitionTimer=setTimeout(()=>{
+    if(!isTransitioningBg)return;
     bgCurrent.style.transition="none";
     bgCurrent.style.backgroundImage=`url("${BACKGROUNDS[nextIndex]}")`;
     bgCurrent.style.opacity="1";
@@ -192,15 +229,17 @@ function updateBackgroundByReps(){
     bgNext.style.opacity="0";
     currentBgIndex=nextIndex;
     isTransitioningBg=false;
+    bgTransitionTimer=null;
   },1000);
 }
 
 function resetGame(){
+  clearGameTimers();
   reps=0;perfectCount=0;goodCount=0;badCount=0;perfectCombo=0;maxPerfectCombo=0;
   targetRadius=44;currentRadius=86;shrinkSpeed=.85;randomMode=false;randomSpeed=shrinkSpeed;lastTime=0;
-  currentBgIndex=0;bgCurrent.style.backgroundImage=`url("${BACKGROUNDS[0]}")`;bgCurrent.style.opacity="1";bgNext.style.opacity="0";
+  currentBgIndex=0;isTransitioningBg=false;bgCurrent.style.transition="none";bgNext.style.transition="none";bgCurrent.style.backgroundImage=`url("${BACKGROUNDS[0]}")`;bgCurrent.style.opacity="1";bgNext.style.opacity="0";
   setAppKunStanding();updateHud();weightEl.textContent=20;
-  gameOverLocked=false;startBgm();state="PLAYING";start.style.display="none";gameover.style.display="none";
+  gameOverAt=0;gameOverLocked=false;startBgm();state="PLAYING";start.style.display="none";gameover.style.display="none";
 }
 
 function updateDifficulty(){
@@ -227,7 +266,10 @@ function updateHud(){repEl.textContent=reps}
 function showJudge(text,color){judgeEl.textContent=text;judgeEl.style.color=color;judgeEl.classList.remove("show");void judgeEl.offsetWidth;judgeEl.classList.add("show")}
 
 function input(){
-  if(state==="GAMEOVER"&&Date.now()-gameOverAt<1200){return}
+  const now=Date.now();
+  if(now-lastInputAt<INPUT_DEBOUNCE_MS)return;
+  lastInputAt=now;
+  if(state==="GAMEOVER"&&now-gameOverAt<1200){return}
   if(gameOverLocked){return}
   if(state==="START"){resetGame();return}
   if(state==="GAMEOVER"){resetGame();return}
@@ -273,14 +315,18 @@ function input(){
     // MISSから1.2秒経過するまで再スタート操作は受け付けない。
     state="GAMEOVER";
     gameOverLocked=true;
-    gameOverAt=Date.now();
+    gameOverAt=now;
 
-    setTimeout(()=>{
+    clearTimeout(endGameTimer);
+    clearTimeout(unlockTimer);
+    endGameTimer=setTimeout(()=>{
       endGame();
+      endGameTimer=null;
     },600);
 
-    setTimeout(()=>{
+    unlockTimer=setTimeout(()=>{
       gameOverLocked=false;
+      unlockTimer=null;
     },1200);
 
     return;
@@ -290,12 +336,12 @@ function input(){
 }
 
 function endGame(){
-  state="GAMEOVER";
+  if(state!=="GAMEOVER")return;
   stopBgm();
   const accuracy=getAccuracy();
   const title=getTitle(accuracy,reps);
   const recordLine=reps>best?"新記録！ナイスバルク！":`最高記録：${best}回`;
-  if(reps>best){best=reps;localStorage.setItem("appkunSquatBest",String(best));bestEl.textContent=best}
+  if(reps>best){best=reps;saveBest(best);bestEl.textContent=best}
   resultText.innerHTML=`
     <div style="font-size:24px;color:#facc15;margin-bottom:8px;">${recordLine}</div>
     <div>記録：${reps}回</div>
@@ -308,23 +354,26 @@ function endGame(){
 }
 
 function drawRing(){
-  ctx.clearRect(0,0,220,220);
-  const cx=110,cy=110;
-  ctx.beginPath();ctx.arc(cx,cy,targetRadius,0,Math.PI*2);ctx.strokeStyle="#fff";ctx.lineWidth=6;ctx.stroke();
-  ctx.beginPath();ctx.arc(cx,cy,currentRadius,0,Math.PI*2);ctx.strokeStyle="#60a5fa";ctx.lineWidth=8;ctx.stroke();
+  if(!ctx)return;
+  const size=ringCanvas.width;
+  const center=size/2;
+  ctx.clearRect(0,0,size,size);
+  ctx.beginPath();ctx.arc(center,center,targetRadius,0,Math.PI*2);ctx.strokeStyle="#fff";ctx.lineWidth=6;ctx.stroke();
+  ctx.beginPath();ctx.arc(center,center,currentRadius,0,Math.PI*2);ctx.strokeStyle="#60a5fa";ctx.lineWidth=8;ctx.stroke();
 }
 function loop(timestamp){
-  if(!lastTime)lastTime=timestamp;
-  const delta=Math.min((timestamp-lastTime)/16.67,2);
-  lastTime=timestamp;
+  const now=Number.isFinite(timestamp)?timestamp:performance.now();
+  if(!lastTime)lastTime=now;
+  const delta=Math.min(Math.max((now-lastTime)/16.67,0),2);
+  lastTime=now;
   if(state==="PLAYING"){currentRadius-=randomSpeed*delta;if(currentRadius<=0)nextCircle()}
-  drawRing();requestAnimationFrame(loop);
+  drawRing();rafId=requestAnimationFrame(loop);
 }
 document.getElementById("startBtn").addEventListener("click",input);
 document.getElementById("retryBtn").addEventListener("click",input);
-window.addEventListener("keydown",(e)=>{if(e.code==="Space"||e.code==="ArrowUp"||e.code==="Enter"){e.preventDefault();input()}});
-window.addEventListener("pointerdown",(e)=>{if(e.target.tagName==="BUTTON")return;input()});
-requestAnimationFrame(loop);
+window.addEventListener("keydown",(e)=>{if(e.repeat)return;if(e.code==="Space"||e.code==="ArrowUp"||e.code==="Enter"){e.preventDefault();input()}});
+window.addEventListener("pointerdown",(e)=>{if(e.target.tagName==="BUTTON")return;if(e.pointerType==="mouse"&&e.button!==0)return;input()});
+rafId=requestAnimationFrame(loop);
 </script>
 </body>
 </html>
