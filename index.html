@@ -30,6 +30,8 @@ h1{margin:0 0 8px;font-size:46px;text-shadow:3px 3px #000}
 .sub{color:#cbd5e1;font-size:20px;margin-bottom:26px}
 button{font-family:"DotGothic16",system-ui,sans-serif;font-size:26px;color:white;background:#2563eb;border:4px solid #111827;border-radius:8px;padding:14px 42px;box-shadow:0 6px 0 #111827;cursor:pointer}
 button:active{transform:translateY(6px);box-shadow:none}
+.sound-toggle{font-size:18px;background:#475569;padding:8px 18px;border-width:3px;box-shadow:0 4px 0 #111827;margin-bottom:18px}
+#playSoundBtn{position:absolute;top:16px;right:18px;z-index:12;display:none;margin:0}
 .help{position:absolute;bottom:14px;width:100%;text-align:center;color:white;font-size:18px;text-shadow:2px 2px #000;z-index:10}
 .small{margin-top:18px;color:#e5e7eb;font-size:18px}
 </style>
@@ -40,6 +42,7 @@ button:active{transform:translateY(6px);box-shadow:none}
     <div id="bgCurrent" class="bg-layer"></div>
     <div id="bgNext" class="bg-layer"></div>
     <div id="hud">回数：<span id="rep">0</span><br>最高：<span id="best">0</span><br>重量：<span id="weight">20</span>kg</div>
+    <button id="playSoundBtn" class="sound-toggle" type="button" aria-pressed="false">音なし</button>
     <div id="ringArea"><canvas id="ringCanvas" width="220" height="220"></canvas></div>
     <div id="judge"></div>
     <div id="stage"><img id="appkun" alt="アップ君" src="./images/apkun_squat_stand.png"></div>
@@ -47,6 +50,7 @@ button:active{transform:translateY(6px);box-shadow:none}
     <div id="start">
       <h1>アップ君のスクワット</h1>
       <div class="sub">丸が枠に重なった瞬間に押せ！</div>
+      <button id="startSoundBtn" class="sound-toggle" type="button" aria-pressed="false">音なし</button>
       <button id="startBtn">GAME START</button>
       <div class="small">100回まではゆるやかに難化。101回目から少しずつフェイント増加</div>
     </div>
@@ -75,6 +79,8 @@ const resultText=document.getElementById("resultText");
 const bgCurrent=document.getElementById("bgCurrent");
 const bgNext=document.getElementById("bgNext");
 const bgm=document.getElementById("bgm");
+const startSoundBtn=document.getElementById("startSoundBtn");
+const playSoundBtn=document.getElementById("playSoundBtn");
 
 const STAND_IMG="./images/apkun_squat_stand.png";
 const SQUAT_IMG="./images/apkun_squat.png";
@@ -90,9 +96,11 @@ let currentBgIndex=0,isTransitioningBg=false,squatTimer=null,bgTransitionTimer=n
 let gameOverAt=0;
 let gameOverLocked=false;
 let endGameTimer=null,unlockTimer=null,rafId=0,lastInputAt=0;
+let soundEnabled=false;
 
 bestEl.textContent=best;
 bgCurrent.style.backgroundImage=`url("${BACKGROUNDS[0]}")`;
+updateSoundButtons();
 
 function loadBest(){
   try{
@@ -109,6 +117,34 @@ function resize(){const scale=Math.min(window.innerWidth/900,window.innerHeight/
 window.addEventListener("resize",resize);resize();
 let audioCtx=null;
 
+function updateSoundButtons(){
+  const label=soundEnabled?"音あり":"音なし";
+  startSoundBtn.textContent=label;
+  playSoundBtn.textContent=label;
+  startSoundBtn.setAttribute("aria-pressed",String(soundEnabled));
+  playSoundBtn.setAttribute("aria-pressed",String(soundEnabled));
+}
+
+function shouldPlayAudio(){return soundEnabled&&state==="PLAYING"&&!document.hidden}
+
+function setSoundEnabled(enabled){
+  soundEnabled=enabled;
+  updateSoundButtons();
+  syncBgm();
+}
+
+function syncBgm(){
+  if(shouldPlayAudio()){startBgm()}else{pauseBgm()}
+}
+
+function handleAudioPause(){pauseBgm()}
+function handleAudioResume(){syncBgm()}
+
+function bindSoundButton(button){
+  button.addEventListener("click",(e)=>{e.stopPropagation();setSoundEnabled(!soundEnabled)});
+  button.addEventListener("keydown",(e)=>{if(e.code==="Space"||e.code==="Enter"){e.stopPropagation()}});
+}
+
 function getAudioCtx(){
   try{
     const AudioCtor=window.AudioContext||window.webkitAudioContext;
@@ -123,6 +159,7 @@ function getAudioCtx(){
 }
 
 function playTone(freq,start,duration,type="square",volume=.18){
+  if(!shouldPlayAudio())return;
   try{
     const soundCtx=getAudioCtx();
     if(!soundCtx)return;
@@ -166,10 +203,15 @@ function playMissSound(){
 }
 
 function startBgm(){
-  if(!bgm||!bgm.paused)return;
+  if(!shouldPlayAudio()||!bgm||!bgm.paused)return;
   bgm.volume=.35;
   const playResult=bgm.play();
   if(playResult&&playResult.catch)playResult.catch(()=>{});
+}
+
+function pauseBgm(){
+  if(!bgm)return;
+  try{bgm.pause()}catch(e){}
 }
 
 function stopBgm(){
@@ -239,7 +281,7 @@ function resetGame(){
   targetRadius=44;currentRadius=86;shrinkSpeed=.85;randomMode=false;randomSpeed=shrinkSpeed;lastTime=0;
   currentBgIndex=0;isTransitioningBg=false;bgCurrent.style.transition="none";bgNext.style.transition="none";bgCurrent.style.backgroundImage=`url("${BACKGROUNDS[0]}")`;bgCurrent.style.opacity="1";bgNext.style.opacity="0";
   setAppKunStanding();updateHud();weightEl.textContent=20;
-  gameOverAt=0;gameOverLocked=false;startBgm();state="PLAYING";start.style.display="none";gameover.style.display="none";
+  gameOverAt=0;gameOverLocked=false;state="PLAYING";start.style.display="none";gameover.style.display="none";playSoundBtn.style.display="block";syncBgm();
 }
 
 function updateDifficulty(){
@@ -338,6 +380,7 @@ function input(){
 function endGame(){
   if(state!=="GAMEOVER")return;
   stopBgm();
+  playSoundBtn.style.display="none";
   const accuracy=getAccuracy();
   const title=getTitle(accuracy,reps);
   const recordLine=reps>best?"新記録！ナイスバルク！":`最高記録：${best}回`;
@@ -369,10 +412,17 @@ function loop(timestamp){
   if(state==="PLAYING"){currentRadius-=randomSpeed*delta;if(currentRadius<=0)nextCircle()}
   drawRing();rafId=requestAnimationFrame(loop);
 }
+bindSoundButton(startSoundBtn);
+bindSoundButton(playSoundBtn);
 document.getElementById("startBtn").addEventListener("click",input);
 document.getElementById("retryBtn").addEventListener("click",input);
 window.addEventListener("keydown",(e)=>{if(e.repeat)return;if(e.code==="Space"||e.code==="ArrowUp"||e.code==="Enter"){e.preventDefault();input()}});
 window.addEventListener("pointerdown",(e)=>{if(e.target.tagName==="BUTTON")return;if(e.pointerType==="mouse"&&e.button!==0)return;input()});
+document.addEventListener("visibilitychange",()=>{if(document.hidden){handleAudioPause()}else{handleAudioResume()}});
+window.addEventListener("blur",handleAudioPause);
+window.addEventListener("focus",handleAudioResume);
+window.addEventListener("pagehide",handleAudioPause);
+window.addEventListener("pageshow",handleAudioResume);
 rafId=requestAnimationFrame(loop);
 </script>
 </body>
