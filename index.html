@@ -116,6 +116,7 @@ function saveBest(value){
 function resize(){const scale=Math.min(window.innerWidth/900,window.innerHeight/520,1.4);wrap.style.transform=`translate(-50%,-50%) scale(${scale})`}
 window.addEventListener("resize",resize);resize();
 let audioCtx=null;
+let audioResumePromise=null;
 
 function updateSoundButtons(){
   const label=soundEnabled?"音あり":"音なし";
@@ -130,6 +131,7 @@ function shouldPlayAudio(){return soundEnabled&&state==="PLAYING"&&!document.hid
 function setSoundEnabled(enabled){
   soundEnabled=enabled;
   updateSoundButtons();
+  if(soundEnabled)unlockAudioContext();
   syncBgm();
 }
 
@@ -138,7 +140,10 @@ function syncBgm(){
 }
 
 function handleAudioPause(){pauseBgm()}
-function handleAudioResume(){syncBgm()}
+function handleAudioResume(){
+  if(shouldPlayAudio())unlockAudioContext();
+  syncBgm();
+}
 
 function bindSoundButton(button){
   button.addEventListener("click",(e)=>{e.stopPropagation();setSoundEnabled(!soundEnabled)});
@@ -150,34 +155,63 @@ function getAudioCtx(){
     const AudioCtor=window.AudioContext||window.webkitAudioContext;
     if(!AudioCtor)return null;
     if(!audioCtx){audioCtx=new AudioCtor()}
-    if(audioCtx.state==="suspended"){
-      const resumeResult=audioCtx.resume();
-      if(resumeResult&&resumeResult.catch)resumeResult.catch(()=>{});
-    }
     return audioCtx;
-  }catch(e){return null}
+  }catch(e){console.warn("AudioContext create failed",e);return null}
 }
 
-function playTone(freq,start,duration,type="square",volume=.18){
+async function resumeAudioContext(){
+  const soundCtx=getAudioCtx();
+  if(!soundCtx)return false;
+  if(soundCtx.state==="running")return true;
+  if(soundCtx.state==="closed"){
+    console.warn("AudioContext is closed");
+    return false;
+  }
+  if(!audioResumePromise){
+    audioResumePromise=soundCtx.resume().catch((e)=>{
+      console.warn("AudioContext resume failed",e);
+      return false;
+    }).finally(()=>{audioResumePromise=null});
+  }
+  await audioResumePromise;
+  if(soundCtx.state!=="running"){
+    console.warn("AudioContext is not running",soundCtx.state);
+    return false;
+  }
+  return true;
+}
+
+function unlockAudioContext(){
+  resumeAudioContext().catch((e)=>console.warn("AudioContext unlock failed",e));
+}
+
+async function playTone(freq,start,duration,type="square",volume=.18){
   if(!shouldPlayAudio())return;
   try{
+    const ready=await resumeAudioContext();
+    if(!ready||!shouldPlayAudio())return;
     const soundCtx=getAudioCtx();
     if(!soundCtx)return;
     const osc=soundCtx.createOscillator();
     const gain=soundCtx.createGain();
+    const startAt=soundCtx.currentTime+start;
+    const stopAt=startAt+duration;
 
     osc.type=type;
-    osc.frequency.setValueAtTime(freq,soundCtx.currentTime+start);
+    osc.frequency.setValueAtTime(freq,startAt);
 
-    gain.gain.setValueAtTime(volume,soundCtx.currentTime+start);
-    gain.gain.exponentialRampToValueAtTime(.001,soundCtx.currentTime+start+duration);
+    gain.gain.setValueAtTime(volume,startAt);
+    gain.gain.exponentialRampToValueAtTime(.001,stopAt);
 
     osc.connect(gain);
     gain.connect(soundCtx.destination);
+    osc.onended=()=>{
+      try{osc.disconnect();gain.disconnect()}catch(e){}
+    };
 
-    osc.start(soundCtx.currentTime+start);
-    osc.stop(soundCtx.currentTime+start+duration);
-  }catch(e){}
+    osc.start(startAt);
+    osc.stop(stopAt);
+  }catch(e){console.warn("playTone failed",e)}
 }
 
 function playPerfectSound(){
@@ -281,7 +315,7 @@ function resetGame(){
   targetRadius=44;currentRadius=86;shrinkSpeed=.85;randomMode=false;randomSpeed=shrinkSpeed;lastTime=0;
   currentBgIndex=0;isTransitioningBg=false;bgCurrent.style.transition="none";bgNext.style.transition="none";bgCurrent.style.backgroundImage=`url("${BACKGROUNDS[0]}")`;bgCurrent.style.opacity="1";bgNext.style.opacity="0";
   setAppKunStanding();updateHud();weightEl.textContent=20;
-  gameOverAt=0;gameOverLocked=false;state="PLAYING";start.style.display="none";gameover.style.display="none";playSoundBtn.style.display="block";syncBgm();
+  gameOverAt=0;gameOverLocked=false;state="PLAYING";start.style.display="none";gameover.style.display="none";playSoundBtn.style.display="block";if(soundEnabled)unlockAudioContext();syncBgm();
 }
 
 function updateDifficulty(){
